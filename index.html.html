@@ -17,7 +17,7 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, addDoc, deleteDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // 전역 객체에 Firebase 함수들을 할당하여 React에서 사용할 수 있게 합니다.
+        // 전역 객체에 Firebase 함수들을 안전하게 할당
         window.FirebaseLib = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, doc, addDoc, deleteDoc, onSnapshot, query };
     </script>
 
@@ -41,6 +41,7 @@
         const { useState, useEffect, useMemo } = React;
 
         const App = () => {
+            const [isReady, setIsReady] = useState(false);
             const [user, setUser] = useState(null);
             const [members, setMembers] = useState([]);
             const [vacations, setVacations] = useState([]);
@@ -59,50 +60,56 @@
             // --- 환경 변수 안전하게 가져오기 ---
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'vacation-app-default';
             
-            // --- Firebase 초기화 및 인증 (Rule 3 준수) ---
+            // --- Firebase 초기화 및 인증 ---
             useEffect(() => {
-                const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore } = window.FirebaseLib;
-                
-                let auth;
-                try {
-                    const firebaseConfig = JSON.parse(__firebase_config);
-                    const app = initializeApp(firebaseConfig);
-                    auth = getAuth(app);
+                // Firebase 라이브러리가 로드될 때까지 잠시 대기
+                const checkFirebase = setInterval(() => {
+                    if (window.FirebaseLib) {
+                        clearInterval(checkFirebase);
+                        startAuth();
+                    }
+                }, 100);
+
+                const startAuth = async () => {
+                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = window.FirebaseLib;
                     
-                    const initAuth = async () => {
-                        try {
-                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                                await signInWithCustomToken(auth, __initial_auth_token);
-                            } else {
-                                await signInAnonymously(auth);
-                            }
-                        } catch (e) {
-                            console.error("Auth Error:", e);
-                            setError("인증 서버 연결에 실패했습니다.");
+                    try {
+                        if (typeof __firebase_config === 'undefined') {
+                            setError("서버 설정 값이 없습니다. Canvas 환경에서 실행해 주세요.");
+                            return;
                         }
-                    };
-                    initAuth();
-                } catch (e) {
-                    console.error("Firebase Init Error:", e);
-                    setError("시스템 설정 오류가 발생했습니다.");
-                }
 
-                const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-                    setUser(u);
-                    if (!u) setLoading(true);
-                });
+                        const firebaseConfig = JSON.parse(__firebase_config);
+                        const app = initializeApp(firebaseConfig);
+                        const auth = getAuth(app);
+                        
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
 
-                return () => unsubscribeAuth();
+                        onAuthStateChanged(auth, (u) => {
+                            setUser(u);
+                            setIsReady(true);
+                        });
+                    } catch (e) {
+                        console.error("Firebase Init Error:", e);
+                        setError("시스템 연결 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+                    }
+                };
+
+                return () => clearInterval(checkFirebase);
             }, []);
 
-            // --- 데이터 실시간 감시 (Rule 1 & 3 준수) ---
+            // --- 데이터 실시간 감시 ---
             useEffect(() => {
-                if (!user) return;
+                if (!isReady || !user) return;
                 
                 const { getFirestore, collection, onSnapshot } = window.FirebaseLib;
                 const db = getFirestore();
 
-                // 멤버 리스트 감시 (Rule 1: artifacts/{appId}/public/data/members)
+                // 멤버 리스트 감시
                 const membersRef = collection(db, 'artifacts', appId, 'public', 'data', 'members');
                 const unsubscribeMembers = onSnapshot(membersRef, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -110,10 +117,10 @@
                     setLoading(false);
                 }, (err) => {
                     console.error("Members Snapshot Error:", err);
-                    setError("데이터를 불러오는 중 오류가 발생했습니다.");
+                    setError("데이터 접근 권한이 없거나 오류가 발생했습니다.");
                 });
 
-                // 휴가 기록 감시 (Rule 1: artifacts/{appId}/public/data/vacations)
+                // 휴가 기록 감시
                 const vacationsRef = collection(db, 'artifacts', appId, 'public', 'data', 'vacations');
                 const unsubscribeVacations = onSnapshot(vacationsRef, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -126,17 +133,9 @@
                     unsubscribeMembers();
                     unsubscribeVacations();
                 };
-            }, [user, appId]);
+            }, [isReady, user, appId]);
 
             // --- 유틸리티 ---
-            const getDaysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
-            const getFirstDayOfMonth = (y, m) => new Date(y, m, 1).getDay();
-            const addDays = (dateStr, days) => {
-                const d = new Date(dateStr);
-                d.setDate(d.getDate() + days);
-                return d.toISOString().split('T')[0];
-            };
-
             const calculateUsedLeave = (memberId) => {
                 return vacations
                     .filter(v => v.memberId === memberId)
@@ -154,8 +153,8 @@
 
             const year = currentDate.getFullYear();
             const month = currentDate.getMonth();
-            const daysInMonth = getDaysInMonth(year, month);
-            const firstDay = getFirstDayOfMonth(year, month);
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const firstDay = new Date(year, month, 1).getDay();
             const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
             const emptySlots = Array.from({ length: firstDay }, (_, i) => i);
 
@@ -171,7 +170,6 @@
                 if (!newMember.name || !user) return;
                 const { getFirestore, collection, addDoc } = window.FirebaseLib;
                 const db = getFirestore();
-                
                 try {
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'members'), {
                         name: newMember.name,
@@ -180,67 +178,49 @@
                     });
                     setNewMember({ name: '', total: 15 });
                     setShowMemberModal(false);
-                } catch (e) {
-                    alert("멤버 등록에 실패했습니다.");
-                }
+                } catch (e) { alert("등록 실패"); }
             };
 
             const handleDeleteMember = async (id) => {
-                if (!confirm("이 팀원을 삭제할까요? 기록도 함께 삭제됩니다.") || !user) return;
+                if (!confirm("삭제할까요?") || !user) return;
                 const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
-                const db = getFirestore();
                 try {
-                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'members', id));
-                } catch (e) {
-                    alert("삭제 중 오류가 발생했습니다.");
-                }
+                    await deleteDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'members', id));
+                } catch (e) { alert("삭제 실패"); }
             };
 
             const handleAddVacation = async () => {
                 if (!vacationForm.memberId || !vacationForm.startDate || !user) return;
                 const { getFirestore, collection, addDoc } = window.FirebaseLib;
-                const db = getFirestore();
-
                 try {
-                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'vacations'), {
+                    await addDoc(collection(getFirestore(), 'artifacts', appId, 'public', 'data', 'vacations'), {
                         ...vacationForm,
                         createdAt: new Date().toISOString()
                     });
                     setShowVacationModal(false);
-                } catch (e) {
-                    alert("휴가 등록에 실패했습니다.");
-                }
+                } catch (e) { alert("등록 실패"); }
             };
 
             const handleDeleteVacation = async (id) => {
-                if (!confirm('해당 휴가 일정을 삭제할까요?') || !user) return;
+                if (!confirm('삭제할까요?') || !user) return;
                 const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
-                const db = getFirestore();
                 try {
-                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vacations', id));
-                } catch (e) {
-                    alert("삭제 중 오류가 발생했습니다.");
-                }
+                    await deleteDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'vacations', id));
+                } catch (e) { alert("삭제 실패"); }
             };
 
-            const closeModals = () => {
-                setShowMemberModal(false);
-                setShowVacationModal(false);
-            };
-
-            // 로딩 및 에러 화면
             if (error) return (
                 <div className="flex h-screen flex-col items-center justify-center p-6 text-center">
                     <div className="text-4xl mb-4">⚠️</div>
                     <div className="text-xl font-bold text-slate-800 mb-2">{error}</div>
-                    <div className="text-slate-500 text-sm">잠시 후 새로고침(F5)을 해주세요.</div>
+                    <button onClick={() => window.location.reload()} className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-xl font-bold">새로고침</button>
                 </div>
             );
 
-            if (loading && !user) return (
+            if (!isReady) return (
                 <div className="flex h-screen flex-col items-center justify-center">
-                    <div className="w-12 h-12 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-4"></div>
-                    <div className="font-bold text-slate-400 animate-pulse">서버 연결 중...</div>
+                    <div className="w-10 h-10 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+                    <div className="font-bold text-slate-400">서버 연결 중...</div>
                 </div>
             );
 
@@ -291,10 +271,9 @@
                                     <h4 className="font-bold mb-2">☁️ 실시간 동기화 On</h4>
                                     <p className="text-[11px] opacity-90 leading-relaxed">
                                         입력된 정보는 즉시 모든 팀원의 화면에 반영됩니다.<br/>
-                                        데이터가 보이지 않는다면 새로고침을 시도하세요.
+                                        마노데이는 연차 차감 없이 기록됩니다.
                                     </p>
                                 </div>
-                                <div className="absolute -right-4 -bottom-4 text-white opacity-10 text-8xl font-black">!</div>
                             </div>
                         </div>
 
@@ -303,9 +282,9 @@
                                 <div className="flex justify-between items-center mb-8">
                                     <h2 className="text-2xl font-black">{year}년 {month + 1}월</h2>
                                     <div className="flex gap-2 bg-slate-50 p-1.5 rounded-2xl">
-                                        <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-white hover:shadow-sm rounded-xl transition-all">◀</button>
+                                        <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-white hover:shadow-sm rounded-xl">◀</button>
                                         <button onClick={() => setCurrentDate(new Date())} className="px-4 py-1 font-bold text-xs bg-white shadow-sm rounded-xl">TODAY</button>
-                                        <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-white hover:shadow-sm rounded-xl transition-all">▶</button>
+                                        <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-white hover:shadow-sm rounded-xl">▶</button>
                                     </div>
                                 </div>
 
@@ -321,7 +300,7 @@
 
                                         return (
                                             <div key={d} onClick={() => {
-                                                if (members.length === 0) return alert("먼저 멤버를 등록해주세요.");
+                                                if (members.length === 0) return alert("멤버를 먼저 등록해주세요.");
                                                 setVacationForm({ memberId: members[0]?.id || '', type: '1.0', subType: '연차', startDate: ds, endDate: ds });
                                                 setShowVacationModal(true);
                                             }} className={`min-h-[110px] p-2 border rounded-2xl cursor-pointer hover:bg-blue-50/30 transition-all ${isToday ? 'border-blue-200 bg-blue-50/30' : 'border-slate-50'}`}>
@@ -331,7 +310,7 @@
                                                         const m = members.find(x => x.id === v.memberId);
                                                         const style = v.type === "1.0" ? "bg-blue-100 text-blue-700" : v.type === "MANO" ? "bg-emerald-100 text-emerald-700" : "bg-orange-100 text-orange-700";
                                                         return (
-                                                            <div key={v.id} onClick={(e) => { e.stopPropagation(); handleDeleteVacation(v.id); }} className={`${style} text-[9px] p-1 rounded-md font-black truncate shadow-sm border border-transparent hover:border-white/50 transition-all`}>
+                                                            <div key={v.id} onClick={(e) => { e.stopPropagation(); handleDeleteVacation(v.id); }} className={`${style} text-[9px] p-1 rounded-md font-black truncate shadow-sm`}>
                                                                 {m?.name || '...'} [{v.subType.slice(0, 2)}]
                                                             </div>
                                                         );
@@ -351,17 +330,11 @@
                             <div className="bg-white rounded-[2rem] p-8 w-full max-w-md scale-in shadow-2xl">
                                 <h2 className="text-xl font-black mb-6">멤버 등록</h2>
                                 <div className="space-y-4">
-                                    <div className="space-y-1">
-                                        <label className="text-[10px] font-bold text-slate-400 px-1">이름</label>
-                                        <input type="text" placeholder="팀원 이름" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold focus:ring-2 focus:ring-blue-100" />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <label className="text-[10px] font-bold text-slate-400 px-1">총 부여 연차</label>
-                                        <input type="number" placeholder="부여 연차" value={newMember.total} onChange={e => setNewMember({...newMember, total: parseFloat(e.target.value)})} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold focus:ring-2 focus:ring-blue-100" />
-                                    </div>
+                                    <input type="text" placeholder="팀원 이름" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold focus:ring-2 focus:ring-blue-100" />
+                                    <input type="number" placeholder="부여 연차" value={newMember.total} onChange={e => setNewMember({...newMember, total: parseFloat(e.target.value)})} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold focus:ring-2 focus:ring-blue-100" />
                                     <div className="flex gap-2 pt-2">
-                                        <button onClick={closeModals} className="flex-1 p-4 font-bold text-slate-400 hover:bg-slate-50 rounded-2xl">취소</button>
-                                        <button onClick={handleAddMember} className="flex-1 p-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all">등록하기</button>
+                                        <button onClick={() => setShowMemberModal(false)} className="flex-1 p-4 font-bold text-slate-400">취소</button>
+                                        <button onClick={handleAddMember} className="flex-1 p-4 bg-blue-600 text-white rounded-2xl font-bold">등록하기</button>
                                     </div>
                                 </div>
                             </div>
@@ -375,42 +348,28 @@
                                 <h2 className="text-xl font-black mb-6">휴가 일정 등록</h2>
                                 <div className="space-y-6">
                                     <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-slate-400 px-1">멤버 선택</label>
-                                            <select value={vacationForm.memberId} onChange={e => setVacationForm({...vacationForm, memberId: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none">
-                                                {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                                            </select>
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-slate-400 px-1">휴가 종류</label>
-                                            <select value={vacationForm.type} onChange={e => setVacationForm({...vacationForm, type: e.target.value, subType: subOptions[e.target.value][0]})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none">
-                                                <option value="1.0">연차 (1.0)</option>
-                                                <option value="0.5">반차 (0.5)</option>
-                                                <option value="0.25">반반차 (0.25)</option>
-                                                <option value="MANO">마노데이 (0.0)</option>
-                                            </select>
-                                        </div>
+                                        <select value={vacationForm.memberId} onChange={e => setVacationForm({...vacationForm, memberId: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none">
+                                            {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                        </select>
+                                        <select value={vacationForm.type} onChange={e => setVacationForm({...vacationForm, type: e.target.value, subType: subOptions[e.target.value][0]})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none">
+                                            <option value="1.0">연차 (1.0)</option>
+                                            <option value="0.5">반차 (0.5)</option>
+                                            <option value="0.25">반반차 (0.25)</option>
+                                            <option value="MANO">마노데이 (0.0)</option>
+                                        </select>
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
                                         {subOptions[vacationForm.type].map(opt => (
-                                            <button key={opt} onClick={() => setVacationForm({...vacationForm, subType: opt})} className={`p-3 rounded-xl border-2 text-[10px] font-black transition-all ${vacationForm.subType === opt ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-white text-slate-400 border-slate-50 hover:bg-slate-50'}`}>{opt}</button>
+                                            <button key={opt} onClick={() => setVacationForm({...vacationForm, subType: opt})} className={`p-3 rounded-xl border-2 text-[10px] font-black transition-all ${vacationForm.subType === opt ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-white text-slate-400 border-slate-50'}`}>{opt}</button>
                                         ))}
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-bold text-slate-400 px-1">시작일</label>
-                                            <input type="date" value={vacationForm.startDate} onChange={e => setVacationForm({...vacationForm, startDate: e.target.value, endDate: vacationForm.type === '1.0' ? vacationForm.endDate : e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />
-                                        </div>
-                                        {vacationForm.type === '1.0' && (
-                                            <div className="space-y-1">
-                                                <label className="text-[10px] font-bold text-slate-400 px-1">종료일</label>
-                                                <input type="date" value={vacationForm.endDate} onChange={e => setVacationForm({...vacationForm, endDate: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />
-                                            </div>
-                                        )}
+                                        <input type="date" value={vacationForm.startDate} onChange={e => setVacationForm({...vacationForm, startDate: e.target.value, endDate: vacationForm.type === '1.0' ? vacationForm.endDate : e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />
+                                        {vacationForm.type === '1.0' && <input type="date" value={vacationForm.endDate} onChange={e => setVacationForm({...vacationForm, endDate: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />}
                                     </div>
                                     <div className="flex gap-2 pt-2">
-                                        <button onClick={closeModals} className="flex-1 p-4 font-bold text-slate-400 hover:bg-slate-50 rounded-2xl">취소</button>
-                                        <button onClick={handleAddVacation} className="flex-1 p-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg shadow-blue-100 hover:bg-blue-700">기록 저장</button>
+                                        <button onClick={() => setShowVacationModal(false)} className="flex-1 p-4 font-bold text-slate-400">취소</button>
+                                        <button onClick={handleAddVacation} className="flex-1 p-4 bg-blue-600 text-white rounded-2xl font-bold">기록 저장</button>
                                     </div>
                                 </div>
                             </div>
