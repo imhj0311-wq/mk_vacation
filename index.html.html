@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Team Vacation Pro (Shared)</title>
+    <title>Team Vacation Pro (Hybrid)</title>
     <!-- React & Babel & Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -17,7 +17,6 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, addDoc, deleteDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // 전역 객체에 Firebase 함수들을 안전하게 할당
         window.FirebaseLib = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, doc, addDoc, deleteDoc, onSnapshot, query };
     </script>
 
@@ -28,7 +27,6 @@
             from { opacity: 0; transform: scale(0.95); }
             to { opacity: 1; transform: scale(1); }
         }
-        /* 스크롤바 커스텀 */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
@@ -42,6 +40,7 @@
 
         const App = () => {
             const [isReady, setIsReady] = useState(false);
+            const [isLocalMode, setIsLocalMode] = useState(false); // 서버 연결 유무 상태
             const [user, setUser] = useState(null);
             const [members, setMembers] = useState([]);
             const [vacations, setVacations] = useState([]);
@@ -57,28 +56,31 @@
                 memberId: '', type: '1.0', subType: '연차', startDate: '', endDate: ''
             });
 
-            // --- 환경 변수 안전하게 가져오기 ---
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'vacation-app-default';
             
-            // --- Firebase 초기화 및 인증 ---
+            // --- 시스템 초기화 (서버 체크 및 로컬 스토리지 호환) ---
             useEffect(() => {
-                // Firebase 라이브러리가 로드될 때까지 잠시 대기
                 const checkFirebase = setInterval(() => {
                     if (window.FirebaseLib) {
                         clearInterval(checkFirebase);
-                        startAuth();
+                        startSystem();
                     }
                 }, 100);
 
-                const startAuth = async () => {
-                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = window.FirebaseLib;
-                    
-                    try {
-                        if (typeof __firebase_config === 'undefined') {
-                            setError("서버 설정 값이 없습니다. Canvas 환경에서 실행해 주세요.");
-                            return;
-                        }
+                const startSystem = async () => {
+                    // 서버 설정값이 없는 경우 (로컬 환경)
+                    if (typeof __firebase_config === 'undefined') {
+                        console.log("로컬 모드로 전환합니다.");
+                        setIsLocalMode(true);
+                        loadLocalData();
+                        setIsReady(true);
+                        setLoading(false);
+                        return;
+                    }
 
+                    // 서버 설정값이 있는 경우 (클라우드 환경)
+                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = window.FirebaseLib;
+                    try {
                         const firebaseConfig = JSON.parse(__firebase_config);
                         const app = initializeApp(firebaseConfig);
                         const auth = getAuth(app);
@@ -95,21 +97,31 @@
                         });
                     } catch (e) {
                         console.error("Firebase Init Error:", e);
-                        setError("시스템 연결 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+                        setIsLocalMode(true);
+                        loadLocalData();
+                        setIsReady(true);
+                        setLoading(false);
                     }
                 };
 
                 return () => clearInterval(checkFirebase);
             }, []);
 
-            // --- 데이터 실시간 감시 ---
+            // 로컬 데이터 로드 함수
+            const loadLocalData = () => {
+                const savedMembers = localStorage.getItem('vacation_members_local');
+                const savedVacations = localStorage.getItem('vacation_list_local');
+                if (savedMembers) setMembers(JSON.parse(savedMembers));
+                if (savedVacations) setVacations(JSON.parse(savedVacations));
+            };
+
+            // --- 데이터 실시간 감시 (클라우드 모드일 때만) ---
             useEffect(() => {
-                if (!isReady || !user) return;
+                if (!isReady || !user || isLocalMode) return;
                 
                 const { getFirestore, collection, onSnapshot } = window.FirebaseLib;
                 const db = getFirestore();
 
-                // 멤버 리스트 감시
                 const membersRef = collection(db, 'artifacts', appId, 'public', 'data', 'members');
                 const unsubscribeMembers = onSnapshot(membersRef, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -117,23 +129,34 @@
                     setLoading(false);
                 }, (err) => {
                     console.error("Members Snapshot Error:", err);
-                    setError("데이터 접근 권한이 없거나 오류가 발생했습니다.");
+                    setIsLocalMode(true);
+                    loadLocalData();
                 });
 
-                // 휴가 기록 감시
                 const vacationsRef = collection(db, 'artifacts', appId, 'public', 'data', 'vacations');
                 const unsubscribeVacations = onSnapshot(vacationsRef, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     setVacations(data);
-                }, (err) => {
-                    console.error("Vacations Snapshot Error:", err);
                 });
 
                 return () => {
                     unsubscribeMembers();
                     unsubscribeVacations();
                 };
-            }, [isReady, user, appId]);
+            }, [isReady, user, isLocalMode]);
+
+            // 로컬 모드일 때 데이터 변경 감지하여 저장
+            useEffect(() => {
+                if (isLocalMode) {
+                    localStorage.setItem('vacation_members_local', JSON.stringify(members));
+                }
+            }, [members, isLocalMode]);
+
+            useEffect(() => {
+                if (isLocalMode) {
+                    localStorage.setItem('vacation_list_local', JSON.stringify(vacations));
+                }
+            }, [vacations, isLocalMode]);
 
             // --- 유틸리티 ---
             const calculateUsedLeave = (memberId) => {
@@ -167,60 +190,66 @@
 
             // --- 액션 핸들러 ---
             const handleAddMember = async () => {
-                if (!newMember.name || !user) return;
-                const { getFirestore, collection, addDoc } = window.FirebaseLib;
-                const db = getFirestore();
-                try {
-                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'members'), {
+                if (!newMember.name) return;
+                
+                if (isLocalMode) {
+                    const member = { ...newMember, id: Date.now().toString() };
+                    setMembers([...members, member]);
+                } else {
+                    const { getFirestore, collection, addDoc } = window.FirebaseLib;
+                    await addDoc(collection(getFirestore(), 'artifacts', appId, 'public', 'data', 'members'), {
                         name: newMember.name,
                         total: newMember.total,
                         createdAt: new Date().toISOString()
                     });
-                    setNewMember({ name: '', total: 15 });
-                    setShowMemberModal(false);
-                } catch (e) { alert("등록 실패"); }
+                }
+                setNewMember({ name: '', total: 15 });
+                setShowMemberModal(false);
             };
 
             const handleDeleteMember = async (id) => {
-                if (!confirm("삭제할까요?") || !user) return;
-                const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
-                try {
+                if (!confirm("삭제할까요?")) return;
+                
+                if (isLocalMode) {
+                    setMembers(members.filter(m => m.id !== id));
+                    setVacations(vacations.filter(v => v.memberId !== id));
+                } else {
+                    const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
                     await deleteDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'members', id));
-                } catch (e) { alert("삭제 실패"); }
+                }
             };
 
             const handleAddVacation = async () => {
-                if (!vacationForm.memberId || !vacationForm.startDate || !user) return;
-                const { getFirestore, collection, addDoc } = window.FirebaseLib;
-                try {
+                if (!vacationForm.memberId || !vacationForm.startDate) return;
+                
+                if (isLocalMode) {
+                    const vac = { ...vacationForm, id: Date.now().toString() };
+                    setVacations([...vacations, vac]);
+                } else {
+                    const { getFirestore, collection, addDoc } = window.FirebaseLib;
                     await addDoc(collection(getFirestore(), 'artifacts', appId, 'public', 'data', 'vacations'), {
                         ...vacationForm,
                         createdAt: new Date().toISOString()
                     });
-                    setShowVacationModal(false);
-                } catch (e) { alert("등록 실패"); }
+                }
+                setShowVacationModal(false);
             };
 
             const handleDeleteVacation = async (id) => {
-                if (!confirm('삭제할까요?') || !user) return;
-                const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
-                try {
+                if (!confirm('삭제할까요?')) return;
+                
+                if (isLocalMode) {
+                    setVacations(vacations.filter(v => v.id !== id));
+                } else {
+                    const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
                     await deleteDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'vacations', id));
-                } catch (e) { alert("삭제 실패"); }
+                }
             };
-
-            if (error) return (
-                <div className="flex h-screen flex-col items-center justify-center p-6 text-center">
-                    <div className="text-4xl mb-4">⚠️</div>
-                    <div className="text-xl font-bold text-slate-800 mb-2">{error}</div>
-                    <button onClick={() => window.location.reload()} className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-xl font-bold">새로고침</button>
-                </div>
-            );
 
             if (!isReady) return (
                 <div className="flex h-screen flex-col items-center justify-center">
                     <div className="w-10 h-10 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-4"></div>
-                    <div className="font-bold text-slate-400">서버 연결 중...</div>
+                    <div className="font-bold text-slate-400">시스템 초기화 중...</div>
                 </div>
             );
 
@@ -229,8 +258,17 @@
                     <header className="max-w-7xl mx-auto mb-10 text-center">
                         <h1 className="text-4xl font-black text-slate-900 tracking-tight">🏖️ Team Vacation Pro</h1>
                         <div className="flex items-center justify-center gap-2 mt-2">
-                            <span className="w-2 h-2 bg-green-500 rounded-full animate-ping"></span>
-                            <p className="text-slate-500 font-semibold italic text-sm">팀원 모두가 실시간으로 공유하는 클라우드 버전</p>
+                            {isLocalMode ? (
+                                <div className="flex items-center gap-2 bg-slate-100 px-3 py-1 rounded-full">
+                                    <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
+                                    <p className="text-slate-500 font-semibold text-xs">로컬 저장 모드 (이 기기에만 저장됨)</p>
+                                </div>
+                            ) : (
+                                <div className="flex items-center gap-2 bg-green-50 px-3 py-1 rounded-full">
+                                    <span className="w-2 h-2 bg-green-500 rounded-full animate-ping"></span>
+                                    <p className="text-green-600 font-semibold text-xs">실시간 클라우드 공유 중</p>
+                                </div>
+                            )}
                         </div>
                     </header>
 
@@ -268,10 +306,10 @@
                             </div>
                             <div className="bg-indigo-600 rounded-[2.5rem] p-8 text-white shadow-xl relative overflow-hidden">
                                 <div className="relative z-10">
-                                    <h4 className="font-bold mb-2">☁️ 실시간 동기화 On</h4>
+                                    <h4 className="font-bold mb-2">{isLocalMode ? '🏠 로컬 환경' : '☁️ 실시간 공유'}</h4>
                                     <p className="text-[11px] opacity-90 leading-relaxed">
-                                        입력된 정보는 즉시 모든 팀원의 화면에 반영됩니다.<br/>
-                                        마노데이는 연차 차감 없이 기록됩니다.
+                                        {isLocalMode ? '현재 서버가 연결되지 않아 내 컴퓨터에만 데이터가 저장됩니다.' : '입력된 정보는 즉시 모든 팀원의 화면에 반영됩니다.'}
+                                        <br/>마노데이는 연차 차감 없이 기록됩니다.
                                     </p>
                                 </div>
                             </div>
