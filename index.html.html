@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Team Vacation Pro (Hybrid)</title>
+    <title>Team Vacation Pro (Cloud)</title>
     <!-- React & Babel & Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -11,7 +11,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700;900&display=swap" rel="stylesheet">
     
-    <!-- Firebase Libraries -->
+    <!-- Firebase Libraries (Rule 1, 3 준수) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -27,25 +27,20 @@
             from { opacity: 0; transform: scale(0.95); }
             to { opacity: 1; transform: scale(1); }
         }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
     </style>
 </head>
 <body class="bg-[#f8fafc]">
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect } = React;
 
         const App = () => {
-            const [isReady, setIsReady] = useState(false);
-            const [isLocalMode, setIsLocalMode] = useState(false); // 서버 연결 유무 상태
+            const [isCloud, setIsCloud] = useState(false);
             const [user, setUser] = useState(null);
             const [members, setMembers] = useState([]);
             const [vacations, setVacations] = useState([]);
             const [loading, setLoading] = useState(true);
-            const [error, setError] = useState(null);
 
             const [currentDate, setCurrentDate] = useState(new Date());
             const [showMemberModal, setShowMemberModal] = useState(false);
@@ -56,35 +51,26 @@
                 memberId: '', type: '1.0', subType: '연차', startDate: '', endDate: ''
             });
 
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'vacation-app-default';
-            
-            // --- 시스템 초기화 (서버 체크 및 로컬 스토리지 호환) ---
-            useEffect(() => {
-                const checkFirebase = setInterval(() => {
-                    if (window.FirebaseLib) {
-                        clearInterval(checkFirebase);
-                        startSystem();
-                    }
-                }, 100);
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'vacation-app-shared';
 
-                const startSystem = async () => {
-                    // 서버 설정값이 없는 경우 (로컬 환경)
-                    if (typeof __firebase_config === 'undefined') {
-                        console.log("로컬 모드로 전환합니다.");
-                        setIsLocalMode(true);
+            // --- 1. 초기화 및 클라우드 연결 체크 ---
+            useEffect(() => {
+                const initSystem = async () => {
+                    if (typeof __firebase_config === 'undefined' || !window.FirebaseLib) {
+                        // 클라우드 설정이 없으면 로컬 모드 활성화
+                        setIsCloud(false);
                         loadLocalData();
-                        setIsReady(true);
                         setLoading(false);
                         return;
                     }
 
-                    // 서버 설정값이 있는 경우 (클라우드 환경)
                     const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = window.FirebaseLib;
                     try {
                         const firebaseConfig = JSON.parse(__firebase_config);
                         const app = initializeApp(firebaseConfig);
                         const auth = getAuth(app);
                         
+                        // Rule 3: Auth First
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                             await signInWithCustomToken(auth, __initial_auth_token);
                         } else {
@@ -93,44 +79,31 @@
 
                         onAuthStateChanged(auth, (u) => {
                             setUser(u);
-                            setIsReady(true);
+                            setIsCloud(!!u);
                         });
                     } catch (e) {
-                        console.error("Firebase Init Error:", e);
-                        setIsLocalMode(true);
+                        console.error("Cloud Connection Failed", e);
+                        setIsCloud(false);
                         loadLocalData();
-                        setIsReady(true);
                         setLoading(false);
                     }
                 };
-
-                return () => clearInterval(checkFirebase);
+                initSystem();
             }, []);
 
-            // 로컬 데이터 로드 함수
-            const loadLocalData = () => {
-                const savedMembers = localStorage.getItem('vacation_members_local');
-                const savedVacations = localStorage.getItem('vacation_list_local');
-                if (savedMembers) setMembers(JSON.parse(savedMembers));
-                if (savedVacations) setVacations(JSON.parse(savedVacations));
-            };
-
-            // --- 데이터 실시간 감시 (클라우드 모드일 때만) ---
+            // --- 2. 실시간 데이터 동기화 (클라우드 모드 전용) ---
             useEffect(() => {
-                if (!isReady || !user || isLocalMode) return;
+                if (!isCloud || !user) return;
                 
                 const { getFirestore, collection, onSnapshot } = window.FirebaseLib;
                 const db = getFirestore();
 
+                // Rule 1: Strict Paths
                 const membersRef = collection(db, 'artifacts', appId, 'public', 'data', 'members');
                 const unsubscribeMembers = onSnapshot(membersRef, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     setMembers(data);
                     setLoading(false);
-                }, (err) => {
-                    console.error("Members Snapshot Error:", err);
-                    setIsLocalMode(true);
-                    loadLocalData();
                 });
 
                 const vacationsRef = collection(db, 'artifacts', appId, 'public', 'data', 'vacations');
@@ -139,39 +112,72 @@
                     setVacations(data);
                 });
 
-                return () => {
-                    unsubscribeMembers();
-                    unsubscribeVacations();
-                };
-            }, [isReady, user, isLocalMode]);
+                return () => { unsubscribeMembers(); unsubscribeVacations(); };
+            }, [isCloud, user, appId]);
 
-            // 로컬 모드일 때 데이터 변경 감지하여 저장
-            useEffect(() => {
-                if (isLocalMode) {
-                    localStorage.setItem('vacation_members_local', JSON.stringify(members));
+            // --- 데이터 저장/삭제 핸들러 ---
+            const handleAddMember = async () => {
+                if (!newMember.name) return;
+                if (!isCloud) {
+                    const data = [...members, { ...newMember, id: Date.now().toString() }];
+                    setMembers(data);
+                    localStorage.setItem('vacation_members_local', JSON.stringify(data));
+                } else {
+                    const { getFirestore, collection, addDoc } = window.FirebaseLib;
+                    await addDoc(collection(getFirestore(), 'artifacts', appId, 'public', 'data', 'members'), {
+                        name: newMember.name, total: newMember.total
+                    });
                 }
-            }, [members, isLocalMode]);
+                setNewMember({ name: '', total: 15 });
+                setShowMemberModal(false);
+            };
 
-            useEffect(() => {
-                if (isLocalMode) {
-                    localStorage.setItem('vacation_list_local', JSON.stringify(vacations));
+            const handleAddVacation = async () => {
+                if (!vacationForm.memberId || !vacationForm.startDate) return;
+                if (!isCloud) {
+                    const data = [...vacations, { ...vacationForm, id: Date.now().toString() }];
+                    setVacations(data);
+                    localStorage.setItem('vacation_list_local', JSON.stringify(data));
+                } else {
+                    const { getFirestore, collection, addDoc } = window.FirebaseLib;
+                    await addDoc(collection(getFirestore(), 'artifacts', appId, 'public', 'data', 'vacations'), {
+                        ...vacationForm, createdAt: new Date().toISOString()
+                    });
                 }
-            }, [vacations, isLocalMode]);
+                setShowVacationModal(false);
+            };
 
-            // --- 유틸리티 ---
+            const handleDeleteVacation = async (id) => {
+                if (!confirm("삭제할까요?")) return;
+                if (!isCloud) {
+                    const data = vacations.filter(v => v.id !== id);
+                    setVacations(data);
+                    localStorage.setItem('vacation_list_local', JSON.stringify(data));
+                } else {
+                    const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
+                    await deleteDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'vacations', id));
+                }
+            };
+
+            const loadLocalData = () => {
+                const m = localStorage.getItem('vacation_members_local');
+                const v = localStorage.getItem('vacation_list_local');
+                if (m) setMembers(JSON.parse(m));
+                if (v) setVacations(JSON.parse(v));
+            };
+
+            // 유틸리티 함수들
             const calculateUsedLeave = (memberId) => {
-                return vacations
-                    .filter(v => v.memberId === memberId)
-                    .reduce((acc, v) => {
-                        if (v.type === "MANO") return acc;
-                        if (v.type === "1.0") {
-                            const start = new Date(v.startDate);
-                            const end = new Date(v.endDate);
-                            const diff = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24)) + 1;
-                            return acc + diff;
-                        }
-                        return acc + parseFloat(v.type);
-                    }, 0);
+                return vacations.filter(v => v.memberId === memberId).reduce((acc, v) => {
+                    if (v.type === "MANO") return acc;
+                    if (v.type === "1.0") {
+                        const start = new Date(v.startDate);
+                        const end = new Date(v.endDate);
+                        const diff = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24)) + 1;
+                        return acc + diff;
+                    }
+                    return acc + parseFloat(v.type);
+                }, 0);
             };
 
             const year = currentDate.getFullYear();
@@ -182,91 +188,27 @@
             const emptySlots = Array.from({ length: firstDay }, (_, i) => i);
 
             const subOptions = {
-                '1.0': ['연차'],
-                '0.5': ['오전반차', '오후반차'],
+                '1.0': ['연차'], '0.5': ['오전반차', '오후반차'],
                 '0.25': ['반반차(09-11)', '반반차(11-13)', '반반차(14-16)', '반반차(16-18)'],
                 'MANO': ['마노(2h 늦참)', '마노(2h 조퇴)']
             };
 
-            // --- 액션 핸들러 ---
-            const handleAddMember = async () => {
-                if (!newMember.name) return;
-                
-                if (isLocalMode) {
-                    const member = { ...newMember, id: Date.now().toString() };
-                    setMembers([...members, member]);
-                } else {
-                    const { getFirestore, collection, addDoc } = window.FirebaseLib;
-                    await addDoc(collection(getFirestore(), 'artifacts', appId, 'public', 'data', 'members'), {
-                        name: newMember.name,
-                        total: newMember.total,
-                        createdAt: new Date().toISOString()
-                    });
-                }
-                setNewMember({ name: '', total: 15 });
-                setShowMemberModal(false);
-            };
-
-            const handleDeleteMember = async (id) => {
-                if (!confirm("삭제할까요?")) return;
-                
-                if (isLocalMode) {
-                    setMembers(members.filter(m => m.id !== id));
-                    setVacations(vacations.filter(v => v.memberId !== id));
-                } else {
-                    const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
-                    await deleteDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'members', id));
-                }
-            };
-
-            const handleAddVacation = async () => {
-                if (!vacationForm.memberId || !vacationForm.startDate) return;
-                
-                if (isLocalMode) {
-                    const vac = { ...vacationForm, id: Date.now().toString() };
-                    setVacations([...vacations, vac]);
-                } else {
-                    const { getFirestore, collection, addDoc } = window.FirebaseLib;
-                    await addDoc(collection(getFirestore(), 'artifacts', appId, 'public', 'data', 'vacations'), {
-                        ...vacationForm,
-                        createdAt: new Date().toISOString()
-                    });
-                }
-                setShowVacationModal(false);
-            };
-
-            const handleDeleteVacation = async (id) => {
-                if (!confirm('삭제할까요?')) return;
-                
-                if (isLocalMode) {
-                    setVacations(vacations.filter(v => v.id !== id));
-                } else {
-                    const { getFirestore, doc, deleteDoc } = window.FirebaseLib;
-                    await deleteDoc(doc(getFirestore(), 'artifacts', appId, 'public', 'data', 'vacations', id));
-                }
-            };
-
-            if (!isReady) return (
-                <div className="flex h-screen flex-col items-center justify-center">
-                    <div className="w-10 h-10 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-4"></div>
-                    <div className="font-bold text-slate-400">시스템 초기화 중...</div>
-                </div>
-            );
+            if (loading && isCloud) return <div className="h-screen flex items-center justify-center font-bold text-slate-400">팀 서버 연결 중...</div>;
 
             return (
                 <div className="min-h-screen p-4 md:p-8">
                     <header className="max-w-7xl mx-auto mb-10 text-center">
                         <h1 className="text-4xl font-black text-slate-900 tracking-tight">🏖️ Team Vacation Pro</h1>
                         <div className="flex items-center justify-center gap-2 mt-2">
-                            {isLocalMode ? (
-                                <div className="flex items-center gap-2 bg-slate-100 px-3 py-1 rounded-full">
-                                    <span className="w-2 h-2 bg-slate-400 rounded-full"></span>
-                                    <p className="text-slate-500 font-semibold text-xs">로컬 저장 모드 (이 기기에만 저장됨)</p>
+                            {isCloud ? (
+                                <div className="flex items-center gap-2 bg-green-50 px-3 py-1 rounded-full border border-green-100">
+                                    <span className="w-2 h-2 bg-green-500 rounded-full animate-ping"></span>
+                                    <p className="text-green-600 font-bold text-xs uppercase">실시간 클라우드 공유 중</p>
                                 </div>
                             ) : (
-                                <div className="flex items-center gap-2 bg-green-50 px-3 py-1 rounded-full">
-                                    <span className="w-2 h-2 bg-green-500 rounded-full animate-ping"></span>
-                                    <p className="text-green-600 font-semibold text-xs">실시간 클라우드 공유 중</p>
+                                <div className="flex items-center gap-2 bg-amber-50 px-3 py-1 rounded-full border border-amber-100">
+                                    <span className="w-2 h-2 bg-amber-400 rounded-full"></span>
+                                    <p className="text-amber-600 font-bold text-xs uppercase">로컬 저장 모드 (비공개)</p>
                                 </div>
                             )}
                         </div>
@@ -277,41 +219,30 @@
                             <div className="bg-white rounded-[2.5rem] p-8 shadow-xl border border-slate-100">
                                 <div className="flex justify-between items-center mb-6">
                                     <h3 className="text-xl font-black text-blue-600">멤버 현황</h3>
-                                    <button onClick={() => setShowMemberModal(true)} className="bg-blue-50 text-blue-600 p-2 rounded-xl hover:bg-blue-600 hover:text-white transition-all shadow-sm">➕</button>
+                                    <button onClick={() => setShowMemberModal(true)} className="bg-blue-50 text-blue-600 p-2 rounded-xl hover:bg-blue-600 hover:text-white transition-all">➕</button>
                                 </div>
                                 <div className="space-y-1">
-                                    <div className="grid grid-cols-4 text-[10px] font-black text-slate-400 px-2 py-2 border-b">
-                                        <span>이름</span><span className="text-center">부여</span><span className="text-center">사용</span><span className="text-center">잔여</span>
-                                    </div>
-                                    {members.length === 0 ? (
-                                        <div className="py-10 text-center text-slate-300 text-sm">멤버를 등록해주세요.</div>
-                                    ) : (
-                                        members.sort((a,b) => a.name.localeCompare(b.name)).map(m => {
-                                            const used = calculateUsedLeave(m.id);
-                                            const rem = (m.total - used).toFixed(2);
-                                            return (
-                                                <div key={m.id} className="grid grid-cols-4 items-center p-3 hover:bg-slate-50 rounded-2xl group transition-all">
-                                                    <div className="flex items-center gap-1 font-bold text-slate-700">
-                                                        {m.name}
-                                                        <span onClick={() => handleDeleteMember(m.id)} className="text-red-300 cursor-pointer opacity-0 group-hover:opacity-100 text-[10px] p-1">✕</span>
-                                                    </div>
-                                                    <div className="text-center text-xs text-slate-400">{m.total}</div>
-                                                    <div className="text-center text-xs text-rose-500 font-bold">{used}</div>
-                                                    <div className="text-center text-blue-600 font-black text-lg">{rem}</div>
-                                                </div>
-                                            );
-                                        })
-                                    )}
+                                    {members.length === 0 ? <p className="text-center py-10 text-slate-300 text-sm">멤버를 추가하세요.</p> : 
+                                    members.sort((a,b)=>a.name.localeCompare(b.name)).map(m => {
+                                        const used = calculateUsedLeave(m.id);
+                                        const rem = (m.total - used).toFixed(2);
+                                        return (
+                                            <div key={m.id} className="grid grid-cols-4 items-center p-3 hover:bg-slate-50 rounded-2xl group transition-all">
+                                                <div className="font-bold text-slate-700">{m.name}</div>
+                                                <div className="text-center text-xs text-slate-400">{m.total}</div>
+                                                <div className="text-center text-xs text-rose-500 font-bold">{used}</div>
+                                                <div className="text-center text-blue-600 font-black text-lg">{rem}</div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </div>
-                            <div className="bg-indigo-600 rounded-[2.5rem] p-8 text-white shadow-xl relative overflow-hidden">
-                                <div className="relative z-10">
-                                    <h4 className="font-bold mb-2">{isLocalMode ? '🏠 로컬 환경' : '☁️ 실시간 공유'}</h4>
-                                    <p className="text-[11px] opacity-90 leading-relaxed">
-                                        {isLocalMode ? '현재 서버가 연결되지 않아 내 컴퓨터에만 데이터가 저장됩니다.' : '입력된 정보는 즉시 모든 팀원의 화면에 반영됩니다.'}
-                                        <br/>마노데이는 연차 차감 없이 기록됩니다.
-                                    </p>
-                                </div>
+                            <div className={`${isCloud ? 'bg-indigo-600' : 'bg-slate-700'} rounded-[2.5rem] p-8 text-white shadow-xl transition-colors`}>
+                                <h4 className="font-bold mb-2">{isCloud ? '☁️ 클라우드 동기화 완료' : '🏠 로컬 전용 모드'}</h4>
+                                <p className="text-[11px] opacity-80 leading-relaxed">
+                                    {isCloud ? '모든 팀원이 동일한 데이터를 실시간으로 확인하고 수정할 수 있습니다.' : 
+                                    '현재 웹 주소(Vercel)에서는 보안 설정상 실시간 공유가 제한됩니다. 공유를 원하시면 클라우드 설정을 추가해야 합니다.'}
+                                </p>
                             </div>
                         </div>
 
@@ -320,9 +251,9 @@
                                 <div className="flex justify-between items-center mb-8">
                                     <h2 className="text-2xl font-black">{year}년 {month + 1}월</h2>
                                     <div className="flex gap-2 bg-slate-50 p-1.5 rounded-2xl">
-                                        <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-white hover:shadow-sm rounded-xl">◀</button>
+                                        <button onClick={() => setCurrentDate(new Date(year, month - 1, 1))} className="p-2 hover:bg-white rounded-xl">◀</button>
                                         <button onClick={() => setCurrentDate(new Date())} className="px-4 py-1 font-bold text-xs bg-white shadow-sm rounded-xl">TODAY</button>
-                                        <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-white hover:shadow-sm rounded-xl">▶</button>
+                                        <button onClick={() => setCurrentDate(new Date(year, month + 1, 1))} className="p-2 hover:bg-white rounded-xl">▶</button>
                                     </div>
                                 </div>
 
@@ -368,11 +299,11 @@
                             <div className="bg-white rounded-[2rem] p-8 w-full max-w-md scale-in shadow-2xl">
                                 <h2 className="text-xl font-black mb-6">멤버 등록</h2>
                                 <div className="space-y-4">
-                                    <input type="text" placeholder="팀원 이름" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold focus:ring-2 focus:ring-blue-100" />
-                                    <input type="number" placeholder="부여 연차" value={newMember.total} onChange={e => setNewMember({...newMember, total: parseFloat(e.target.value)})} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold focus:ring-2 focus:ring-blue-100" />
-                                    <div className="flex gap-2 pt-2">
+                                    <input type="text" placeholder="이름" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold" />
+                                    <input type="number" placeholder="부여 연차" value={newMember.total} onChange={e => setNewMember({...newMember, total: parseFloat(e.target.value)})} className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold" />
+                                    <div className="flex gap-2">
                                         <button onClick={() => setShowMemberModal(false)} className="flex-1 p-4 font-bold text-slate-400">취소</button>
-                                        <button onClick={handleAddMember} className="flex-1 p-4 bg-blue-600 text-white rounded-2xl font-bold">등록하기</button>
+                                        <button onClick={handleAddMember} className="flex-1 p-4 bg-blue-600 text-white rounded-2xl font-bold">등록</button>
                                     </div>
                                 </div>
                             </div>
@@ -383,13 +314,13 @@
                     {showVacationModal && (
                         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
                             <div className="bg-white rounded-[2rem] p-8 w-full max-w-lg scale-in shadow-2xl">
-                                <h2 className="text-xl font-black mb-6">휴가 일정 등록</h2>
+                                <h2 className="text-xl font-black mb-6">일정 등록</h2>
                                 <div className="space-y-6">
                                     <div className="grid grid-cols-2 gap-4">
-                                        <select value={vacationForm.memberId} onChange={e => setVacationForm({...vacationForm, memberId: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none">
+                                        <select value={vacationForm.memberId} onChange={e => setVacationForm({...vacationForm, memberId: e.target.value})} className="p-4 bg-slate-50 rounded-2xl font-bold outline-none">
                                             {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                                         </select>
-                                        <select value={vacationForm.type} onChange={e => setVacationForm({...vacationForm, type: e.target.value, subType: subOptions[e.target.value][0]})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none">
+                                        <select value={vacationForm.type} onChange={e => setVacationForm({...vacationForm, type: e.target.value, subType: subOptions[e.target.value][0]})} className="p-4 bg-slate-50 rounded-2xl font-bold outline-none">
                                             <option value="1.0">연차 (1.0)</option>
                                             <option value="0.5">반차 (0.5)</option>
                                             <option value="0.25">반반차 (0.25)</option>
@@ -402,12 +333,12 @@
                                         ))}
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
-                                        <input type="date" value={vacationForm.startDate} onChange={e => setVacationForm({...vacationForm, startDate: e.target.value, endDate: vacationForm.type === '1.0' ? vacationForm.endDate : e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />
-                                        {vacationForm.type === '1.0' && <input type="date" value={vacationForm.endDate} onChange={e => setVacationForm({...vacationForm, endDate: e.target.value})} className="w-full p-4 bg-slate-50 rounded-2xl font-bold outline-none" />}
+                                        <input type="date" value={vacationForm.startDate} onChange={e => setVacationForm({...vacationForm, startDate: e.target.value, endDate: vacationForm.type === '1.0' ? vacationForm.endDate : e.target.value})} className="p-4 bg-slate-50 rounded-2xl font-bold outline-none" />
+                                        {vacationForm.type === '1.0' && <input type="date" value={vacationForm.endDate} onChange={e => setVacationForm({...vacationForm, endDate: e.target.value})} className="p-4 bg-slate-50 rounded-2xl font-bold outline-none" />}
                                     </div>
-                                    <div className="flex gap-2 pt-2">
+                                    <div className="flex gap-2">
                                         <button onClick={() => setShowVacationModal(false)} className="flex-1 p-4 font-bold text-slate-400">취소</button>
-                                        <button onClick={handleAddVacation} className="flex-1 p-4 bg-blue-600 text-white rounded-2xl font-bold">기록 저장</button>
+                                        <button onClick={handleAddVacation} className="flex-1 p-4 bg-blue-600 text-white rounded-2xl font-bold">저장</button>
                                     </div>
                                 </div>
                             </div>
