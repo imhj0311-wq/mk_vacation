@@ -97,7 +97,8 @@ const App = () => {
     const [showMemberModal,   setShowMemberModal]   = useState(false);
     const [showVacationModal, setShowVacationModal] = useState(false);
     const [editingVacation,   setEditingVacation]   = useState(null); // null=등록, obj=수정
-    const [newMember,         setNewMember]         = useState({ name: '', total: 15 });
+    const [editingMember,     setEditingMember]     = useState(null); // null=등록, obj=수정
+    const [newMember,         setNewMember]         = useState({ name: '', total: '15' });
     const [vacationForm,      setVacationForm]      = useState(EMPTY_FORM);
 
     const showToast = (msg) => {
@@ -120,13 +121,33 @@ const App = () => {
         else window.addEventListener('firebase-ready', setup, { once: true });
     }, []);
 
-    /* 멤버 추가 */
-    const handleAddMember = async () => {
+    /* 멤버 등록 모달 열기 */
+    const openAddMember = () => {
+        setEditingMember(null);
+        setNewMember({ name: '', total: '15' });
+        setShowMemberModal(true);
+    };
+
+    /* 멤버 수정 모달 열기 */
+    const openEditMember = (m) => {
+        setEditingMember(m);
+        setNewMember({ name: m.name, total: String(m.total) });
+        setShowMemberModal(true);
+    };
+
+    /* 멤버 저장 (등록 or 수정) */
+    const handleSaveMember = async () => {
         if (!newMember.name.trim()) return;
-        await window.FirebaseLib.addDoc(col('members'), { name: newMember.name, total: newMember.total });
-        setNewMember({ name: '', total: 15 });
+        if (editingMember) {
+            await window.FirebaseLib.updateDoc(ref('members', editingMember.id), { name: newMember.name, total: parseFloat(newMember.total) || 0 });
+            showToast('멤버가 수정되었습니다 ✓');
+        } else {
+            await window.FirebaseLib.addDoc(col('members'), { name: newMember.name, total: parseFloat(newMember.total) || 0 });
+            showToast('멤버가 등록되었습니다 ✓');
+        }
+        setNewMember({ name: '', total: '15' });
+        setEditingMember(null);
         setShowMemberModal(false);
-        showToast('멤버가 등록되었습니다 ✓');
     };
 
     /* 멤버 삭제 */
@@ -135,6 +156,7 @@ const App = () => {
         await window.FirebaseLib.deleteDoc(ref('members', id));
         for (const v of vacations.filter(v => v.memberId === id))
             await window.FirebaseLib.deleteDoc(ref('vacations', v.id));
+        setShowMemberModal(false);
         showToast('멤버가 삭제되었습니다');
     };
 
@@ -189,8 +211,8 @@ const App = () => {
     };
 
     /* 연차 계산 */
-    const calcUsed = (memberId) =>
-        vacations.filter(v => v.memberId === memberId).reduce((acc, v) => {
+    const calcUsed = (memberId) => {
+        const raw = vacations.filter(v => v.memberId === memberId).reduce((acc, v) => {
             if (v.type === 'MANO') return acc;
             if (v.type === '1.0') {
                 const diff = Math.ceil(Math.abs(new Date(v.endDate || v.startDate) - new Date(v.startDate)) / 86400000) + 1;
@@ -198,6 +220,8 @@ const App = () => {
             }
             return acc + parseFloat(v.type);
         }, 0);
+        return Number.isInteger(raw) ? raw : parseFloat(raw.toFixed(2));
+    };
 
     /* 달력 */
     const year        = currentDate.getFullYear();
@@ -228,11 +252,11 @@ const App = () => {
             )}
 
             <header className="max-w-7xl mx-auto mb-8 text-center">
-                <h1 className="text-4xl font-black text-slate-900 tracking-tight">🏖️ Team Vacation Pro</h1>
+                <h1 className="text-4xl font-black text-slate-900 tracking-tight">🏖️ 마인드노크 1본부 2팀 휴가관리</h1>
                 <div className="flex items-center justify-center gap-2 mt-2">
                     <div className="flex items-center gap-2 bg-green-50 px-3 py-1 rounded-full border border-green-100">
                         <span className="w-2 h-2 bg-green-500 rounded-full animate-ping"></span>
-                        <p className="text-green-600 font-bold text-xs uppercase">1본부 2팀 휴가 관리</p>
+                        <p className="text-green-600 font-bold text-xs uppercase">OFF Air </p>
                     </div>
                 </div>
                 {/* 범례 */}
@@ -253,7 +277,7 @@ const App = () => {
                     <div className="bg-white rounded-[2rem] p-6 shadow-xl border border-slate-100">
                         <div className="flex justify-between items-center mb-5">
                             <h3 className="text-lg font-black text-indigo-600">멤버 현황</h3>
-                            <button onClick={() => setShowMemberModal(true)}
+                            <button onClick={openAddMember}
                                 className="bg-indigo-50 text-indigo-600 p-2 rounded-xl hover:bg-indigo-600 hover:text-white transition-all text-sm">➕</button>
                         </div>
 
@@ -268,13 +292,13 @@ const App = () => {
                                 ? <p className="text-center py-8 text-slate-300 text-sm">멤버를 추가하세요.</p>
                                 : [...members].sort((a, b) => a.name.localeCompare(b.name)).map(m => {
                                     const used  = calcUsed(m.id);
-                                    const rem   = (m.total - used).toFixed(1);
+                                    const remVal = m.total - used; const rem = Number.isInteger(remVal) ? String(remVal) : remVal.toFixed(2).replace(/\.?0+$/, '');
                                     const color = colorMap[m.id];
                                     return (
                                         <div key={m.id} className="grid grid-cols-4 items-center p-2 hover:bg-slate-50 rounded-xl group transition-all">
-                                            <div className="flex items-center gap-1.5">
+                                            <div className="flex items-center gap-1.5 cursor-pointer" onClick={() => openEditMember(m)}>
                                                 <span style={{ width:8, height:8, borderRadius:'50%', background:color, display:'inline-block', flexShrink:0 }}></span>
-                                                <span className="font-bold text-slate-700 text-xs">{m.name}</span>
+                                                <span className="font-bold text-slate-700 text-xs hover:text-indigo-600 transition-colors">{m.name}</span>
                                             </div>
                                             <div className="text-center text-xs text-slate-400">{m.total}</div>
                                             <div className="text-center text-xs text-rose-500 font-bold">{used}</div>
@@ -291,8 +315,8 @@ const App = () => {
                     </div>
 
                     <div className="bg-green-600 rounded-[2rem] p-6 text-white shadow-xl">
-                        <h4 className="font-bold mb-1 text-sm">☁️ 1본부 2팀 휴가 일정 관리</h4>
-                        <p className="text-[10px] opacity-80 leading-relaxed">필요한 기능이 있는 경우 팀장에게 말해주세요.</p>
+                        <h4 className="font-bold mb-1 text-sm">☁️ 실시간 동기화 중</h4>
+                        <p className="text-[10px] opacity-80 leading-relaxed">모든 팀원이 동일한 데이터를 실시간으로 확인하고 수정할 수 있습니다.</p>
                         <p className="text-[10px] opacity-60 mt-2">멤버: {members.length}명 · 일정: {vacations.length}건</p>
                     </div>
                 </div>
@@ -362,18 +386,26 @@ const App = () => {
             {showMemberModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
                     <div className="bg-white rounded-[2rem] p-8 w-full max-w-md scale-in shadow-2xl">
-                        <h2 className="text-xl font-black mb-6">멤버 등록</h2>
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-xl font-black">{editingMember ? '멤버 수정' : '멤버 등록'}</h2>
+                            {editingMember && (
+                                <button onClick={() => handleDeleteMember(editingMember.id)}
+                                    className="text-xs bg-red-50 text-red-400 border border-red-100 px-3 py-1.5 rounded-xl font-bold hover:bg-red-100 transition-colors">
+                                    🗑 삭제
+                                </button>
+                            )}
+                        </div>
                         <div className="space-y-4">
                             <input type="text" placeholder="이름" value={newMember.name}
                                 onChange={e => setNewMember({...newMember, name: e.target.value})}
-                                onKeyDown={e => e.key==='Enter' && handleAddMember()}
+                                onKeyDown={e => e.key==='Enter' && handleSaveMember()}
                                 className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold border border-slate-100" />
-                            <input type="number" placeholder="부여 연차" value={newMember.total}
-                                onChange={e => setNewMember({...newMember, total: parseFloat(e.target.value)||0})}
+                            <input type="number" placeholder="부여 연차 (예: 15, 11.5)" value={newMember.total} step="0.25" min="0"
+                                onChange={e => setNewMember({...newMember, total: e.target.value})}
                                 className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold border border-slate-100" />
                             <div className="flex gap-2">
-                                <button onClick={() => setShowMemberModal(false)} className="flex-1 p-4 font-bold text-slate-400">취소</button>
-                                <button onClick={handleAddMember} className="flex-1 p-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors">등록</button>
+                                <button onClick={() => { setShowMemberModal(false); setEditingMember(null); }} className="flex-1 p-4 font-bold text-slate-400">취소</button>
+                                <button onClick={handleSaveMember} className="flex-1 p-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-colors">{editingMember ? '수정 완료' : '등록'}</button>
                             </div>
                         </div>
                     </div>
