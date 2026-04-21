@@ -53,13 +53,13 @@ const SUB_OPTIONS = {
     '1.0' : ['연차'],
     '0.5' : ['오전반차', '오후반차'],
     '0.25': ['반반차(09-11)', '반반차(11-13)', '반반차(14-16)', '반반차(16-18)'],
-    'MANO': ['마노(2h 늦참)', '마노(2h 조퇴)'],
+    'MANO': ['오전마노(2h 늦참)', '오후마노(2h 조퇴)'],
 };
 
 /* 달력 칩에 표시할 라벨 */
 const getChipLabel = (v) => {
     if (v.type === '1.0')   return '연차';
-    if (v.type === 'MANO')  return v.subType === '마노(2h 늦참)' ? '늦참' : '조퇴';
+    if (v.type === 'MANO')  return (v.subType === '오전마노(2h 늦참)' || v.subType === '마노(2h 늦참)') ? '오전마노' : '오후마노';
     if (v.type === '0.5')   return v.subType === '오전반차' ? '오전반차' : '오후반차';
     if (v.type === '0.25') {
         // "반반차(09-11)" → "09-11"
@@ -252,11 +252,11 @@ const App = () => {
             )}
 
             <header className="max-w-7xl mx-auto mb-8 text-center">
-                <h1 className="text-4xl font-black text-slate-900 tracking-tight">🏖️ 마인드노크 1본부 2팀 휴가관리</h1>
+                <h1 className="text-4xl font-black text-slate-900 tracking-tight">🏖️ Team Vacation Pro</h1>
                 <div className="flex items-center justify-center gap-2 mt-2">
                     <div className="flex items-center gap-2 bg-green-50 px-3 py-1 rounded-full border border-green-100">
                         <span className="w-2 h-2 bg-green-500 rounded-full animate-ping"></span>
-                        <p className="text-green-600 font-bold text-xs uppercase">OFF Air </p>
+                        <p className="text-green-600 font-bold text-xs uppercase">실시간 팀 공유 중</p>
                     </div>
                 </div>
                 {/* 범례 */}
@@ -315,8 +315,8 @@ const App = () => {
                     </div>
 
                     <div className="bg-green-600 rounded-[2rem] p-6 text-white shadow-xl">
-                        <h4 className="font-bold mb-1 text-sm">☁️ 참고사항</h4>
-                        <p className="text-[10px] opacity-80 leading-relaxed">수정 원하는 기능 및 오류가 발생하면 팀장에게 말해주세요.</p>
+                        <h4 className="font-bold mb-1 text-sm">☁️ 실시간 동기화 중</h4>
+                        <p className="text-[10px] opacity-80 leading-relaxed">모든 팀원이 동일한 데이터를 실시간으로 확인하고 수정할 수 있습니다.</p>
                         <p className="text-[10px] opacity-60 mt-2">멤버: {members.length}명 · 일정: {vacations.length}건</p>
                     </div>
                 </div>
